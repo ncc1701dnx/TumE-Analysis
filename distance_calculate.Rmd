@@ -1,0 +1,303 @@
+---
+title: "distance_calculate"
+author: "Chenrui Xie"
+output: html_document
+date: "2024-02-10"
+---
+
+# About Question 1 And Question 2
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+# 0: Environmental execution
+## Library packages
+
+```{r library}
+library(ape)
+library(msa)
+library(seqinr)
+library(ggtree)
+library(ggmsa)
+library(dplyr)
+library(ggplot2)
+library(magrittr)
+library(stringr)
+library(factoextra)
+library(pheatmap)
+```
+
+# 1: Read two files into R environment
+Use msa package to read .fasta file rather than ape because seq_lenth inconsistency
+
+```{r "1. read sequence"}
+# read fasta file
+aa.sequence = readAAStringSet("./data_used/TumE.fasta") # use msa package
+
+# read annotation file
+TumE_annotations = read.csv("./data_used/TumE_annotations.csv", check.names=FALSE)
+```
+
+# 2: Sequence alignment use msa package
+## Two main questions encountered here:
+1: Seq_name inconsistency between two files\
+A: Using gsub delete extra name after AA_Seq_name
+
+
+2: Multiple na values after distance calculation induces errors in calculating hierarchical tree\
+A: Omit na values by rows and columns\
+
+```{r "2. multiple sequence alignment"}
+# remove redundant name
+aa.sequence@ranges@NAMES = gsub('\\s.*', '', aa.sequence@ranges@NAMES) # Align seq_names across two files
+
+# Convert Multiple Sequence Alignment
+aa.sequence.alignment <- msa(aa.sequence) # Alignment between AA sequences
+aa.alignment = msaConvert(aa.sequence.alignment, type="seqinr::alignment") # Convert into seqinr format
+
+# calculate distance
+dist_matrix = dist.alignment(aa.alignment, "identity") |> as.matrix() # as.dist calculation
+write.csv(dist_matrix, 'distance-matrix.csv')
+
+# remove NAs
+dist_matrix_rm = dist_matrix[apply(dist_matrix, 1, function(x) sd(x)!=0),] |> na.omit() # Na value remove from rows
+dist_matrix_rm = dist_matrix_rm[, rownames(dist_matrix_rm)] |> as.dist() # Then remove na values in columns
+
+## if use hclust
+## cluster_result = hclust(as.dist(dist_matrix_rm))
+
+cluster_result = dist_matrix_rm
+```
+
+# 3: Cluster of amino acid sequences
+## 3.1: using bionj to calculate phylogenetic tree using the BIONJ algorithm
+
+```{r "3. NJ tree"}
+tree = bionj(cluster_result)
+
+# visualization
+data = tidy_msa(aa.sequence) # convert sequence fasta file into tidyverse format
+
+p1 = ggtree(tree) +
+     geom_tiplab(size=1.5) +
+     geom_facet(geom=geom_msa, data=data, panel='msa', font=NULL, color="Chemistry_AA") +
+     xlim_tree(0.6)
+
+ggsave(p1, file="tree.pdf", width=9, height=45)
+
+p1
+```
+
+## 3.2: Circulate the hirarchical tree to make it more paper-ready like.
+Here in this plot, we can calculate 15 main chunks(clusters).
+
+```{r "circular tree"}
+# use of circular tree
+p2 = ggtree(tree, layout='circular', 
+            ladderize=FALSE, size=0.8, branch.length="none",col="red") +
+     geom_tiplab2(hjust=-0.3, size=0.7) +
+     geom_tippoint(size=0.5,col="blue") +
+     geom_nodepoint(color="black", alpha=1/4, size=2) +
+     theme(legend.title=element_text(face="bold"),
+           legend.position="bottom",
+           legend.box="horizontal",
+           legend.text=element_text(size=rel(0.5)))
+
+ggsave(p2, file="tree_circular.pdf", width=9, height=30)
+
+p2
+```
+
+## 3.3.0: Map against annotation.csv data
+In the following code chunk, I labeled the name of each leaf using the annotation results
+
+```{r "rectangular and name_aligned tree"}
+
+# add taxonomy and function from annotation data
+aa_tax_func = data.frame(aa=tree[["tip.label"]]) %>% left_join(TumE_annotations, join_by(aa==uniprotAC))
+aa_tax_func$all_tax = apply(aa_tax_func, 1, function(x){paste0(x, collapse=" | ")})
+
+# rectangular tree
+tree_tax = tree
+tree_tax[["tip.label"]] = aa_tax_func$all_tax
+
+p3 = ggtree(tree_tax, layout='rectangular', size=0.8, col="deepskyblue3") +
+     geom_tiplab(size=1.5, color="purple4", hjust=-0.05) +
+     geom_tippoint(size=1.5, color="deepskyblue3") +
+     geom_nodepoint(color="pink", alpha=1/4, size=5) +
+     xlim(0, 0.91) +
+     theme_tree2()
+
+ggsave(p3, file="tree_rectangular.pdf", width=15, height=45)
+
+p3
+```
+\
+We can see the annotation results is labled in each leaf, based on this, we can check if my cluster results aligned with your prediction.
+
+### 3.3.0.1 Mark the possible clusters by hand
+![Mark the possible clusters by hand](tree_rectangular_marked.pdf)\
+
+Here I have marked 15 clusters, combine with your species and functional annotations, we see that sequence from same genus and have same fucntions do prone to be clustered togather
+
+## 3.3.1: Tree marked with only AA seq_names
+
+```{r "3.3.1. protein tree"}
+# protein tree
+p4 = ggtree(tree, layout='rectangular', size=0.8, col="deepskyblue3") +
+     geom_tiplab(size=1.5, color="purple4", hjust=-0.05) +
+     geom_tippoint(size=1.5, color="deepskyblue3") +
+     geom_nodepoint(color="pink", alpha=1/4, size=5) +
+     theme_tree2()
+
+ggsave(p4, file="tree_protein.pdf", width=9, height=45)
+
+p4
+```
+
+## 3.3.2: Tree marked with only species names
+
+```{r "3.3.2. species tree"}
+# rectangular tree
+tree_tax = tree
+tree_tax[["tip.label"]] = aa_tax_func$species
+
+p5 = ggtree(tree_tax, layout='rectangular', size=0.8, col="deepskyblue3") +
+     geom_tiplab(size=1.5, color="purple4", hjust=-0.05) +
+     geom_tippoint(size=1.5, color="deepskyblue3") +
+     geom_nodepoint(color="pink", alpha=1/4, size=5) +
+     xlim(0, 0.64) +
+     theme_tree2()
+
+ggsave(p5, file="tree_species.pdf", width=9, height=45)
+
+p5
+```
+
+## 3.3.3: Tree marked with only function annotation results
+
+```{r "3.3.3. function tree"}
+# rectangular tree
+tree_func = tree
+tree_func[["tip.label"]] = aa_tax_func$`deepfri prediction1`
+
+p6 = ggtree(tree_func, layout='rectangular', size=0.8, col="deepskyblue3") +
+     geom_tiplab(size=1.5, color="purple4", hjust=-0.05) +
+     geom_tippoint(size=1.5, color="deepskyblue3") +
+     geom_nodepoint(color="pink", alpha=1/4, size=5) +
+     xlim(0, 0.59) +
+     theme_tree2()
+
+ggsave(p6, file="tree_function.pdf", width=9, height=45)
+
+p6
+```
+
+# One more thing
+## Automatic cluster marking and group subsetting
+After I marked 15 clusters by hand using p3, I found that there are a package "factoextra" can let me automatically mark clusters by diferrent colors
+
+```{r "OMT1. hierarchical clustering"}
+# find optimum k (abandoned)
+#fviz_nbclust(as.matrix(dist_matrix_rm), FUNcluster=kmeans, method='silhouette')
+print(fviz_nbclust(as.matrix(dist_matrix_rm), FUNcluster=kmeans, method='silhouette')) 
+# Based on this plot, we find at k=2, there is a very high in-group score, after 2 there is a downwards trend, but not big. Same happens to k=6 and k=8.
+# Conclusion: No Elbow Found!!!
+
+# cluster
+cluster_result = hclust(as.dist(dist_matrix_rm), method="ward.D")
+
+# visualization
+# As mentioned before, set k = 15.
+p8 = fviz_dend(cluster_result, 
+               k=15, rect=TRUE, horiz=TRUE, cex=0.3, 
+               main='', ylab='') +
+               theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+ggsave(plot=p8, filename='./hclust.pdf', width=8, height=35)
+
+cluster_label = data.frame(color=p8[["plot_env"]][["data"]][["labels"]][["col"]],
+                           label=p8[["plot_env"]][["data"]][["labels"]][["label"]])
+
+write.csv(cluster_label, './cluster_label.csv', row.names=FALSE)
+
+p8
+```
+
+\
+After the clustering using standard hclust, it gave us a benefit of convert hierarchical tree into standard tables.\
+Please check cluster_label.csv file, you will find that I have convert the hierarachical tree information into groups.\
+We have in this .csv file 15 different groups, The colors column have 15 colors, indicates 15 different clusters, and in the label group are the AA sequence names.\
+
+# Conclusion: We have find 15 different clusters in your provided data. The AA sequences that came from species belonging to same genus and/or possessing same functions are more likely to be clustered togather. 
+\
+Amino acid sequences possessing the same function are more likely to be clustered together than the genus to which they belong. However, it cannot be said that the genus it belongs to does not contribute to the clustering results. Therefore, for protein sequences that perform similar functions across different species and are clustered together, we might pay extra attention. Their structural similarity and functional resemblance suggest they may follow similar evolutionary pathways. However, beyond these two pieces of information, we have discovered many sequences that do not originate from the same genus nor perform the same function, yet they are still clustered together in the same group. This observation could indicate that some protein functions may have the same origin. For instance, enzymes like *DNA binding* and *acting on ester bonds* are often categorized into the same cluster, sometimes even into the smallest cluster, which might only contain these two enzymes. Hence, we can also study the evolutionary similarities between these two enzymes. This type of similarity study can be assisted by using **phyloP** scores.
+
+# Next steps
+
+After my former cluster results, I've provided some possible next steps here that would allow us to continue our analysis.
+
+## 1: Check interested AA sequence 
+For e.g. AA compositions
+```{r "Check composition of amino acid"}
+aa.sequence_df = as.data.frame(aa.sequence)
+
+# interest amino acid
+aa = 'A0A0F7PAR7' # For e.g
+aa.interest = aa.sequence_df[aa, 'x']
+aa.interest_freq = aa.interest %>% 
+                   stringr::str_split("") %>% 
+                   table() %>% 
+                   as.data.frame() %>% 
+                   set_colnames(c('Amino_Acid', 'Percentage'))
+
+# barplot
+p7 = ggplot(aa.interest_freq, aes(x=Amino_Acid, y=Percentage)) +
+     geom_bar(stat="identity", fill="skyblue") +
+     labs(title=paste0("Composition of ", aa), x="Amino Acid", y="Percentage")
+
+ggsave(p7, file="amino acid composition.pdf", width=8, height=6)
+
+p7
+```
+
+## 2：Check the similarity inside every of the selected 15 clusters
+```{r "Visualize similarity in each cluster"}
+# subset groups
+subset_cluster_label = cluster_label[cluster_label$color == "#F8766DFF", ]
+
+# Subset dist_matrix
+labels_to_keep = subset_cluster_label$label
+# Subset the dist_matrix to keep only rows and columns in labels_to_keep
+dist_matrix_subset = dist_matrix[labels_to_keep, labels_to_keep]
+
+# For e.g. we can use heatmap to visualize the 
+p9 <- pheatmap(as.matrix(dist_matrix_subset),
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         cellwidth = 10,
+         cellheight = 10,
+         border_color = NA)
+
+ggsave(p9, file="subgroup heatmap example.pdf", width=10, height=10)
+
+p9
+```
+
+# Answer question 3
+\
+Firstly, from my experience, the gut microbiota is complex and interdependent. Current technology cannot replicate the internal environment of the gut in vitro, nor maintain such a microbial quantity within the gut outside the body. Therefore, expecting to study the gut microbiota using *in vitro* experiments is nearly impossible, making *in vivo* experiments crucial. On the other hand, the complex environment of the gut also makes it difficult to obtain direct findings from human *in vivo* experiments. For instance, methods used in bovine studies, such as performing fistula surgery on the omasum and installing transparent materials, are not feasible in humans. So, how do we obtain data from *in vivo* experiments and extensively mine the results? Bioinformatics methods are almost the only way. 
+
+
+
+By using plasma and fecal samples, we can extract ample microbial information, and after comparison, we can identify microbes of interest and purify and culture them *in vitro* to validate our findings. For many microbes, such bioinformatics experiments are almost the only way to focus on them, especially for some anaerobic microbes. I have experience in purifying and passaging anaerobic microbes and am well aware of the difficulties and costs associated with culturing and researching these types of microbes. Without bioinformatics data, few would turn their attention to these microbes. However, anaerobic and facultative-anaerobic microbes constitute a significant proportion in the gut. Therefore, I believe that using bioinformatics methods in studying gut microbiota is especially important.
+
+
+
+Returning to the task you assigned, the protein sequences provided in your proteomics data enable us to identify groups of structurally similar proteins. This similarity suggests functional and evolutionary relationships that are challenging to characterize through biological experiments alone. We all remember the errors caused by biotaxonomy based on physical characteristics, which, even today, profoundly, affects biological research and is being replaced by genomics-based classification. In this challenge, I utilized the annotation table you provided that was matched with online databases and tools, which is indicative of the revolution that bioinformatics brings to biological research. Additionally, unsupervised learning methods based on neural networks, like your developed *SWISS-MODEL* or Google’s *AlphaFold2*, have unveiled a new world in protein research. I still remember how difficult and costly protein structure research was during my undergraduate studies. Cryo-electron microscopy has played such a pivotal role in protein structure research at that time, and owning the latest and most advanced cryo-EM meant groundbreaking discoveries. However, bioinformatics research based on computing and large models has corrected this path (with all respects), simplifying operations and costs, and making large-scale protein structure prediction possible. 
+
+
+
+In your paper, you not only predicted structures but also inferred functions through structural similarities. It is so hard that without bioinformatics technologies, such discoveries would be incredibly costly and time-consuming. Therefore, this is what I consider to be the role of bioinformatics in biomedical science: to screen, filter hypothesis, make discoveries, and reduce redundant biological experiments through lower costs, shorter times, more statistical precision, and greater repeatability, finally leading to biological experiment validation. This accelerates the benefits to human society.
+
